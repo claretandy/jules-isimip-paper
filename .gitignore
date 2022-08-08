@@ -1,4 +1,4 @@
-/plots/*.png
+/plots/
 .idea
 /r6715_python_packages/share/testdata/
 /r6715_python_packages/share/calc_weights.py
