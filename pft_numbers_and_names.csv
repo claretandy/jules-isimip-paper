@@ -1,0 +1,18 @@
+Number,shortname,fullname
+0,BET-Tr,Tropical Broadleaf Evergreen Trees
+1,BET-Te,Temperate Broadleaf Evergreen Trees
+2,BDT,Broadleaf Deciduous Trees
+3,NET,Needleleaf Evergreen Trees
+4,NDT,Needleleaf Deciduous Trees
+5,C3g-Natural,C3 Grasses Natural
+6,C3g-Crops,C3 Grasses Crops
+7,C3g-Pasture,C3 Grasses Pasture
+8,C4g-Natural,C4 Grasses Natural
+9,C4g-Crops,C4 Grasses Crops
+10,C4g-Pasture,C4 Grasses Pasture
+11,Esh,Evergreen Shrubs
+12,DSh,Deciduous Shrubs
+13,Urban,Urban Impervious
+14,Water,Water
+15,Bare,Bare Soil
+16,Ice,Snow and Ice
