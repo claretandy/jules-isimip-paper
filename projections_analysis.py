@@ -178,6 +178,7 @@ def getVar_timeseries(fire=True, nofire=True, var='frac', stream='ilamb', region
     :param fire:
     :param nofire:
     :param var:
+    :param stream: 'ilamb' for most variables or 'gen_ann_pftlayer' for frac
     :param region:
     :return:
     '''
@@ -208,7 +209,7 @@ def getVar_timeseries(fire=True, nofire=True, var='frac', stream='ilamb', region
                 except:
                     out_dict[f"{mod}-fire-{rcp}-{var}"] = None
 
-                    # Save out_dict to a pickle file
+        # Save out_dict to a pickle file
         with open(pkl_file, 'wb') as f:
             pickle.dump(out_dict, f)
 
@@ -274,6 +275,13 @@ def getVar_on_gwls(fire=True, nofire=True, var='frac', stream='ilamb', region='s
 
 
 def get_river_basins(cube=None, region='southafrica', plot=False):
+    '''
+    Get river basin data
+    :param cube: Either None (outputs a geopandas dataframe) or if cube=iris.Cube.cube then output basins on that grid
+    :param region:
+    :param plot:
+    :return:
+    '''
 
     # from std_functions import cube2gdalds
     import geopandas as gpd
@@ -295,11 +303,13 @@ def get_river_basins(cube=None, region='southafrica', plot=False):
                                       'basin_name': ['Parana', 'Atlantico Leste & Sudeste', 'Atlantico NE Oriental',
                                                'Sao Francisco', 'Amazonica', 'Tocantins & Araguaia']})
 
+    # Select the basin vectors that intersect with the country
     basins = gpd.read_file(shpfile)
     cntry_poly = cntry.loc[cntry['ADMIN'] == cntry_name].geometry
     cntry_basins_i = basins.geometry.map(lambda x: x.intersects(cntry_poly.geometry.any()))
     cntry_basins = basins.loc[cntry_basins_i]
     if region == 'brazil':
+        # For Brazil, we want to sub-select just the major basins
         cntry_basins = pd.merge(cntry_basins, basins_subset, on='PFAF_ID')
 
     # Plot Basins
@@ -723,8 +733,6 @@ def create_dicts(var=None, region=None):
             var_ts_dict = getVar_timeseries(fire=True, nofire=True, var=var, stream=stream, region=reg)
             print('   Calculating basin aggregation')
             var_ts_basins_df = aggregateTimeseries_by_basin(in_dict=var_ts_dict, var=var, region=reg)
-            # basin_df[f"{var}_{reg}"] = var_ts_basins_df
-            # var_ts_basins_df = aggregateTimeseries_by_basin(in_dict=None, var=var, region=region)
             print('   Extracting data on GWLs')
             var_gwl_dict = getVar_on_gwls(fire=True, nofire=True, var=var, stream=stream, region=reg)
 
