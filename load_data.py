@@ -750,11 +750,13 @@ def jules_output(jobid, model='all', var='npp_gb', stream='ilamb', rcp='rcp60', 
                 infile = path + mod.lower() + '_' + rcp_lut[onercp] + '.' + stream + '.' + str(yr) + '.nc'
                 if os.path.isfile(infile):
                     try:
-                        cube = jules.load_cube(infile, var)
+                        cube = jules.load_cube(infile, var, callback=jules_output_onload)
+                        # Horizontal coordinates refer to the centre of the grid cell
                         if not cube.coord('latitude').has_bounds():
                             cube.coord('latitude').guess_bounds(bound_position=0.5)
                         if not cube.coord('longitude').has_bounds():
                             cube.coord('longitude').guess_bounds(bound_position=0.5)
+
                         if bbox:
                             cube = cube.intersection(latitude=(bbox[1], bbox[3]), longitude=(bbox[0], bbox[2]))
                         cube.data = ma.masked_invalid(cube.data)
@@ -766,15 +768,16 @@ def jules_output(jobid, model='all', var='npp_gb', stream='ilamb', rcp='rcp60', 
         unify_time_units(outcubelist)
         cube = outcubelist.concatenate_cube()
         # Note about the time coordinate:
-        #   By default, the stream is saved at the end of the aggregation period (month in this case)
+        #   By default, the stream from JULES is saved at the end of the aggregation period (month in this case)
         #   Meaning that the date point is the end of the period, and the bounds refer to the preceding month
-        tcoord = cube.coord('time')
-        myu = tcoord.units
-        bnd_start = [myu.num2date(bnd[0]) for bnd in cube.coord('time').bounds]  # Get the first bound point
-        tcoord.points = myu.date2num(bnd_start)
-        tcoord.bounds = None
-        cube.coord('time').guess_bounds(0)
-        cube = cube.extract(iris.Constraint(time=lambda cell: start <= cell.point < end))
+        #   The following is not needed however, because this is now handled in the callback function
+        # tcoord = cube.coord('time')
+        # myu = tcoord.units
+        # bnd_start = [myu.num2date(bnd[0]) for bnd in cube.coord('time').bounds]  # Get the first bound point
+        # tcoord.points = myu.date2num(bnd_start)
+        # tcoord.bounds = None
+        # cube.coord('time').guess_bounds(0)
+        # cube = cube.extract(iris.Constraint(time=lambda cell: start <= cell.point < end))
         if not cube.coord('latitude').has_bounds():
             cube.coord('latitude').guess_bounds(0.5)
         if not cube.coord('longitude').has_bounds():
@@ -890,50 +893,67 @@ def jules_output_onload(cube, field, filename):
     :return: cube with corrected time units
     '''
 
+    import os
     import cf_units
     import datetime as dt
-    import iris.coord_categorisation
-    from dateutil import relativedelta
+    from dateutil import relativedelta as reldt
 
-    cube.coord("time").bounds = None
-    tcoord = cube.coord("time")
-    tcoord.units = cf_units.Unit(tcoord.units.origin, calendar="gregorian")
-    tcoord.convert_units("days since 1661-01-01 00:00:00")
-    # Proleptic gregorian goes backwards from when the gregorian calendar was first implemented (1582)
-    # tcoord.units = cf_units.Unit(tcoord.units.origin, calendar="proleptic_gregorian")
+    # Time coordinates need a bit of work ...
+    old_tcoord = cube.coord("time").copy()
+    old_origin = old_tcoord.units.origin
 
-    # This is monthly data, so make the point refer to the first of the month
-    myu = tcoord.units
-    dates = myu.num2date(tcoord.points)
-    pts = [cf_units.date2num(dt.datetime(timeval.year, timeval.month, timeval.day), 'days since 1661-01-01',
-                             calendar='gregorian') for timeval in dates]
-    diff = [(myu.num2date(pts[di]) - myu.num2date(pts[di - 1])).days for di in np.arange(len(pts)) if di > 0]
+    # Create some new units, with a sensible origin and gregorian calendar
+    new_origin = "days since 1850-01-01 00:00:00"
+    new_tcoord = cube.coord("time").copy()
+    new_tcoord.units = cf_units.Unit(new_origin, calendar="gregorian")
+    # NB: Proleptic gregorian goes backwards from when the gregorian calendar was first implemented (1582),
+    # so the following is not needed for ISIMIP ...
+    # new_tcoord.units = cf_units.Unit(new_origin, calendar="proleptic_gregorian")
+    new_tcoord.bounds = None
+    # We'll change the data points once we know the time interval
+
+    # Find out whether we have a daily, monthly or annual data stream
+    old_u = old_tcoord.units
+    dates = old_u.num2date(old_tcoord.points)
+    pts = np.array([cf_units.date2num(dt.datetime(timeval.year, timeval.month, timeval.day), old_origin,
+                             calendar=old_tcoord.units.calendar) for timeval in dates], dtype=np.float32)
+    diff = [(old_u.num2date(pts[di]) - old_u.num2date(pts[di - 1])).days for di in np.arange(len(pts)) if di > 0]
     mndiff = np.mean(diff)
     tstep = 'daily' if mndiff < 2 else 'monthly' if mndiff < 350 else 'annual'
 
-    if 'daily' in filename or tstep == 'daily':
-        tcoord.points = [
-            cf_units.date2num(dt.datetime(timeval.year, timeval.month, timeval.day), 'days since 1661-01-01',
-                              calendar='gregorian') for timeval in dates]
+    # Now, create the new time points in the new time units,
+    #   correcting for the fact that JULES time points referring to the END of the timestep period
+    #   We're going to make the time point refer to the START of the timestep period
+    if 'daily' in os.path.basename(filename) or tstep == 'daily':
+        new_points = np.array([cf_units.date2num(dt.datetime(d.year, d.month, d.day) - reldt.relativedelta(days=1),
+                                                 new_origin,
+                                                 calendar=new_tcoord.units.calendar)
+                               for d in dates], dtype=np.float32)
 
-    elif 'monthly' in filename or tstep == 'monthly':
-        tcoord.points = [cf_units.date2num(dt.datetime(timeval.year, timeval.month, 1), 'days since 1661-01-01',
-                                           calendar='gregorian') for timeval in dates]
+    elif 'monthly' in os.path.basename(filename) or tstep == 'monthly':
+        new_points = np.array([cf_units.date2num(dt.datetime(d.year, d.month, 1) - reldt.relativedelta(months=1),
+                                                 new_origin,
+                                                 calendar=new_tcoord.units.calendar)
+                               for d in dates], dtype=np.float32)
 
-    elif 'annual' in filename or tstep == 'annual':
-        tcoord.points = [
-            cf_units.date2num(dt.datetime(timeval.year, 1, 1), 'days since 1661-01-01', calendar='gregorian') for
-            timeval in dates]
+    elif 'annual' in os.path.basename(filename) or tstep == 'annual':
+        new_points = np.array([cf_units.date2num(dt.datetime(d.year, 1, 1) - reldt.relativedelta(years=1),
+                                                 new_origin,
+                                                 calendar=new_tcoord.units.calendar)
+                               for d in dates], dtype=np.float32)
 
     else:
         # Assume daily
-        tcoord.points = [
-            cf_units.date2num(dt.datetime(timeval.year, timeval.month, timeval.day), 'days since 1661-01-01',
-                              calendar='gregorian') for timeval in dates]
-    # pdb.set_trace()
+        new_points = np.array([cf_units.date2num(dt.datetime(d.year, d.month, d.day) - reldt.relativedelta(days=1),
+                                                 new_origin,
+                                                 calendar=new_tcoord.units.calendar)
+                               for d in dates], dtype=np.float32)
+
+    new_tcoord.points = new_points
+    new_tcoord.guess_bounds(bound_position=0)
     # Replace the time coordinate with the corrected one
     cube.remove_coord("time")
-    cube.add_dim_coord(tcoord, 0)  # might need to find this dimension
+    cube.add_dim_coord(new_tcoord, 0)  # might need to find this dimension
 
     return cube
 
