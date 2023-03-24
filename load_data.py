@@ -103,6 +103,11 @@ def aggregator_multiyear(cube, var, agg_period='year'):
         # Year constraint only accepts years where number of months = 12
         seascon = iris.Constraint(time=lambda t: (t.bound[1] - t.bound[0]) > dt.timedelta(hours=85 * 24.0))
         # First, aggregate by season
+        coord_list = [coord.name() for coord in cube.coords()]
+        if 'season' not in coord_list:
+            iris.coord_categorisation.add_season(cube, 'time')
+        if 'season_year' not in coord_list:
+            iris.coord_categorisation.add_season_year(cube, 'time')
         cube_agg = cube.aggregated_by(['season', 'season_year'], agg_funcs[var])
         # Then, remove seasons with < 3 months data
         cube_agg = cube_agg.extract(seascon)

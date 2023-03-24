@@ -1,4 +1,6 @@
 import os, sys
+import pickle
+
 import matplotlib as mpl
 mpl.use('agg')
 import iris
@@ -15,7 +17,7 @@ import warnings
 import std_functions as sf
 
 
-def fig1_preprocessing(agg_period='year', region='global'):
+def fig1_preprocessing(agg_period='year', fire=False, region='global'):
     '''
     Do the pre-processing so that we have a ncie dictionary that we can easily plot
     :param agg_period: can be 'year', 'djf', 'mam', 'jja', 'son' or 'all_seas'
@@ -24,6 +26,10 @@ def fig1_preprocessing(agg_period='year', region='global'):
     '''
 
     bbox = load_data.get_region_bbox(region=region)
+    if fire:
+        jobid = 'u-cf137'
+    else:
+        jobid = 'u-bk886'
 
     print('Loading observations ...')
     # Load observations
@@ -36,11 +42,15 @@ def fig1_preprocessing(agg_period='year', region='global'):
     print('Loading model data ...')
     # Load model data
     modeldata = {}
-    modeldata['et'] = load_data.isimip_output('evap', start=obs['et']['GLEAM']['start'],
-                                                end=obs['et']['GLEAM']['end'], bbox=bbox)
-    modeldata['gpp'] = load_data.isimip_output('gpp', start=obs['gpp']['GBAF']['start'], end=obs['gpp']['GBAF']['end'], bbox=bbox)
-    modeldata['albedo'] = load_data.isimip_output('albedo', start=obs['albedo']['GEWEX.SRB']['start'],
-                                                  end=obs['albedo']['GEWEX.SRB']['end'], bbox=bbox)
+    modeldata['et'] = load_data.jules_output(jobid=jobid, var='evap', stream='ilamb', start=obs['et']['GLEAM']['start'], end=obs['et']['GLEAM']['end'], bbox=bbox)
+    modeldata['gpp'] = load_data.jules_output(jobid=jobid, var='gpp', stream='ilamb', start=obs['gpp']['GBAF']['start'], end=obs['gpp']['GBAF']['end'], bbox=bbox)
+    modeldata['albedo'] = load_data.jules_output(jobid=jobid, var='gpp', stream='ilamb', start=obs['albedo']['GEWEX.SRB']['start'], end=obs['albedo']['GEWEX.SRB']['end'], bbox=bbox)
+
+    # modeldata['et'] = load_data.isimip_output('evap', start=obs['et']['GLEAM']['start'],
+    #                                             end=obs['et']['GLEAM']['end'], bbox=bbox)
+    # modeldata['gpp'] = load_data.isimip_output('gpp', start=obs['gpp']['GBAF']['start'], end=obs['gpp']['GBAF']['end'], bbox=bbox)
+    # modeldata['albedo'] = load_data.isimip_output('albedo', start=obs['albedo']['GEWEX.SRB']['start'],
+    #                                               end=obs['albedo']['GEWEX.SRB']['end'], bbox=bbox)
 
     # Aggregate stuff
     print('Aggregating observational data')
@@ -80,6 +90,60 @@ def fig1_preprocessing(agg_period='year', region='global'):
     return obs2plot, modanom2plot
 
 
+
+def fig1_improved_preprocessing(var, agg_period='year', source='Observations', fire=False, region='global'):
+    '''
+    Do the pre-processing so that we have a ncie dictionary that we can easily plot
+    :param var: variable name can be 'et', 'gpp' or 'albedo'
+    :param agg_period: can be 'year', 'djf', 'mam', 'jja', 'son' or 'all_seas'
+    :param source: can be 'Observations' or any one of 4 ISIMIP models
+    :param region: can be 'global', 'southafrica' or 'brazil'
+    :return: two dictionaries - one for observations, second for model anomalies
+    '''
+
+    bbox = load_data.get_region_bbox(region=region)
+
+    if fire:
+        jobid = 'u-cf137'
+    else:
+        jobid = 'u-bk886'
+
+    var_src_lut = {'et': 'GLEAM',
+                   'gpp': 'GBAF',
+                   'albedo': 'GEWEX.SRB'}
+    mod_var_lut = {'et': {'varname': 'fqw_gb', 'stream': 'ilamb'},
+                   'gpp': {'varname': 'gpp_gb', 'stream': 'ilamb'},
+                   'albedo': {'varname': 'albedo_land', 'stream': 'gen_mon_gb'}}
+
+    model = 'HADGEM2-ES' if source == 'Observations' else source
+    # Need this for the start and end time coords even if loading model data
+    obs = load_data.observations(var, src=var_src_lut[var], bbox=bbox)
+    # Need this for the model anomalies if loading model data
+    obs_agged = load_data.aggregator_multiyear(obs[var_src_lut[var]]['data'], var, agg_period=agg_period)
+    # Need this as a template for regridding obs to model grid
+    modeldata = load_data.jules_output(jobid=jobid, var=mod_var_lut[var]['varname'], stream=mod_var_lut[var]['stream'], start=obs[var_src_lut[var]]['start'], end=obs[var_src_lut[var]]['end'], model=model, bbox=bbox)[model]
+    # modeldata = load_data.isimip_output(mod_var_lut[var], start=obs[var_src_lut[var]]['start'], end=obs[var_src_lut[var]]['end'], model=model, bbox=bbox)[model]
+
+    # Regrid to model grid
+    obs2plot = obs_agged.regrid(modeldata, iris.analysis.Linear())
+    # Mask the array
+    obs2plot.data = ma.masked_array(obs2plot.data.data, mask=modeldata[0].data.mask)
+
+    if source == 'Observations':
+        # return 2D cube
+        return obs2plot
+    else:
+        # Load the model data
+        # modeldata = load_data.isimip_output(mod_var_lut[var], start=obs[var_src_lut[var]]['start'], end=obs[var_src_lut[var]]['end'], model=source, bbox=bbox)[source]
+        # Aggregate it for the desired period
+        mod_agged = load_data.aggregator_multiyear(modeldata, var, agg_period=agg_period)
+        # Calculate obs - model anomalies
+        mod_agged.data = ma.masked_array(mod_agged.data.data, mask=modeldata[0].data.mask)
+        modanom2plot = mod_agged.copy(data=mod_agged.data - obs2plot.data)
+
+        return modanom2plot
+
+
 def get_contour_levels(data2plot, extend='neither', level_num=200):
     '''
     Returns contour levels for plotting
@@ -89,24 +153,27 @@ def get_contour_levels(data2plot, extend='neither', level_num=200):
     :return: dictionary containing contour levels, vmin and vmax for each variable
     '''
 
+    minpc = 5
+    maxpc = 95
+
     def _get_min_max():
         if extend == 'centre_zero':
-            tmin = np.nanpercentile(values, 1)
-            tmax = np.nanpercentile(values, 99)
+            tmin = np.nanpercentile(values, minpc)
+            tmax = np.nanpercentile(values, maxpc)
             fmax = max(abs(tmin), abs(tmax))
             fmin = -fmax
         elif extend == 'neither':
             fmin = np.nanmin(values)
             fmax = np.nanmax(values)
         elif extend == 'min':
-            fmin = np.nanpercentile(values, 1)
+            fmin = np.nanpercentile(values, minpc)
             fmax = np.nanmax(values)
         elif extend == 'max':
             fmin = np.nanmin(values)
-            fmax = np.nanpercentile(values, 99)
+            fmax = np.nanpercentile(values, maxpc)
         elif extend == 'both':
-            fmin = np.nanpercentile(values, 1)
-            fmax = np.nanpercentile(values, 99)
+            fmin = np.nanpercentile(values, minpc)
+            fmax = np.nanpercentile(values, maxpc)
         else:
             fmin = np.nanmin(values)
             fmax = np.nanmax(values)
@@ -286,6 +353,295 @@ def fig1(region='global'):
         plt.suptitle('ISIMIP: Multi-year '+agg_periods[agg]+' Mean', fontsize=20)
 
         fig.savefig(ofile, bbox_inches='tight')
+        plt.close()
+
+
+
+def paper_fig3(region='global'):
+    '''
+    Plot figure 3
+    *** Used in the Paper ***
+    :param region: string. Either 'global', 'southafrica' or 'brazil'
+    :return:
+    '''
+
+    import matplotlib
+    matplotlib.use('agg')
+    import iris.quickplot as qplt
+    import cartopy.crs as ccrs
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as colors
+    import iris.plot as iplt
+    import itertools
+
+    x0, y0, x1, y1 = load_data.get_region_bbox(region)
+
+    # Get the fixed legend values
+    fixed_obs_levels_file = "fixed_obs_levels_fig3.pkl"
+    fixed_anom_levels_file = "fixed_anom_levels_fig3.pkl"
+
+    if not (os.path.isfile(fixed_obs_levels_file) and os.path.isfile(fixed_anom_levels_file)):
+        obs2plot, modanom2plot = fig1_preprocessing(agg_period='year', region='global')
+
+    if os.path.isfile(fixed_obs_levels_file):
+        with open(fixed_obs_levels_file, "rb") as f:
+            obs_levels = pickle.load(f)
+    else:
+        with open(fixed_obs_levels_file, "wb") as f:
+            obs_levels = get_contour_levels(obs2plot, extend='max', level_num=200)
+            pickle.dump(obs_levels, f)
+
+    if os.path.isfile(fixed_anom_levels_file):
+        with open(fixed_anom_levels_file, "rb") as f:
+            anom_levels = pickle.load(f)
+    else:
+        with open(fixed_anom_levels_file, "wb") as f:
+            anom_levels = get_contour_levels(modanom2plot, extend='centre_zero', level_num=8)
+            pickle.dump(anom_levels, f)
+
+    # Set up the colour maps and legends
+    obs_cmap = {'gpp': plt.get_cmap('Greens'), 'et': plt.get_cmap('Blues'), 'albedo': plt.get_cmap('magma')}
+    anom_cmap = {'gpp': plt.get_cmap('RdYlGn'), 'et': plt.get_cmap('BrBG'), 'albedo': plt.get_cmap('PiYG')}
+
+    col_vars = ['gpp', 'et', 'albedo']
+    row_vars = ['Observations', 'GFDL-ESM2M', 'HADGEM2-ES', 'IPSL-CM5A-LR', 'MIROC5']
+    # Plot seasons as COLUMNS and Obs/Models as ROWS. Legend on RIGHT
+    nrows = len(row_vars)
+    ncols = len(col_vars)
+    # Make an index for each position in the plot matrix
+    ind = np.reshape(1 + np.arange(ncols * nrows), (nrows, ncols))
+
+    ofile = 'plots/fig3_global_annual-mean.png'
+
+    # Make the figure
+    fig = plt.figure(figsize=(14.5, 13), dpi=300)  # width, height
+    fig.subplots_adjust(hspace=0.1, wspace=0.01, top=0.93, bottom=0.03, left=0.025, right=0.99)
+
+    for irow, row in enumerate(row_vars):
+        for icol, col in enumerate(col_vars):
+
+            print(irow, row, icol, col)
+
+            # Add a subplot
+            ax = fig.add_subplot(nrows, ncols, ind[irow, icol], projection=ccrs.Robinson())
+
+            # Get the 2D cube to plot
+            cube2plot = fig1_improved_preprocessing(col.lower(), agg_period='year', source=row, region='global')
+
+            if row == 'Observations':
+                cmap = obs_cmap[col]
+                norm = colors.BoundaryNorm(obs_levels[col]['cl'], ncolors=cmap.N)  # , clip=True)
+                # Plot cube
+                ocm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, norm=norm, extend='max')
+                ax.set_title(col.upper() + ' ('+obs_levels[col]['unit_string']+')', fontsize=16)
+            else:
+                cmap = anom_cmap[col]
+                norm = colors.BoundaryNorm(anom_levels[col]['cl'], extend='both', ncolors=cmap.N)  # , clip=True)
+                vmin = anom_levels[col]['vmin']
+                vmax = anom_levels[col]['vmax']
+                # Plot cube
+                acm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, levels=anom_levels[col]['cl'], extend='both')  # norm=norm, vmin=vmin, vmax=vmax
+                # colors.CenteredNorm() # works, but can't standardise across the 4 model plots
+                # acm = iplt.pcolormesh(cube2plot, cmap=cmap, vmin=vmin, vmax=vmax)  # ,
+
+            # Add some stuff to the plot
+            ax.set_global()
+            ax.coastlines()
+            ax.gridlines(color="gray", alpha=0.2, draw_labels=False)
+
+            l, b, w, h = ax.get_position().bounds
+
+            if icol == 0:
+                # NB: ax.text is the ONLY WAY to set the row labels with cartopy axes
+                # ax.text(x0, 0.5 * (y0 + y1), f'{row}', va='center', ha='right', rotation='vertical', fontsize=16)
+                plt.figtext(l - (w / 15), b + (h / 2), row, ha='left', va='center',
+                            rotation='vertical', fontsize=16)
+
+            if row == 'Observations':
+                ## Values legend
+                # [left, bottom, width, height]
+                obs_ax = fig.add_axes([l + (w/4), b+0.005, w/2, 0.01])
+                obs_colorbar = plt.colorbar(ocm, obs_ax, orientation='horizontal', extend='max')
+                if col == 'albedo':
+                    obs_colorbar.set_ticklabels(
+                        ['{:.1f}'.format(x) for x in obs_colorbar.get_ticks()])
+                else:
+                    obs_colorbar.set_ticklabels([obs_levels[col]['label_format'].format(x) for x in obs_colorbar.get_ticks()])
+                obs_colorbar.set_label(obs_levels[col]['unit_string'])
+
+            if irow == len(row_vars)-1:
+                ## Anomaly legend
+                print("Anomaly legend")
+                # [left, bottom, width, height]
+                # acm_ax = plt.gcf().add_axes([l + w + 0.05, b - h, 0.02, h*2])
+                acm_ax = fig.add_axes([l + (w/8), 0, 3*w/4, 0.01])
+                acm_colorbar = plt.colorbar(acm, acm_ax, orientation='horizontal', extend='both')  # , ticks=anom_levels[var]['cl'])
+                acm_colorbar.set_ticklabels([anom_levels[col]['label_format'].format(x) for x in acm_colorbar.get_ticks()])
+                acm_colorbar.set_label(col.upper() + ' anomaly (model - obs)')
+
+        plt.suptitle('ISIMIP: Multi-year Annual Mean', fontsize=20)
+        # fig.tight_layout()
+        fig.savefig(ofile, bbox_inches='tight')
+    # fig.savefig(ofile)
+    plt.close()
+
+
+def paper_figS4(region='brazil', fire=False):
+    '''
+    Plot figure S4
+    *** Used in the Supplementary info ***
+    :param region: string. Either 'global', 'southafrica' or 'brazil'
+    :return:
+    '''
+
+    import matplotlib
+    matplotlib.use('agg')
+    import iris.quickplot as qplt
+    import cartopy.crs as ccrs
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as colors
+    import iris.plot as iplt
+    import itertools
+
+    x0, y0, x1, y1 = load_data.get_region_bbox(region)
+    legend_type = ['fixed']
+
+    # Get the fixed legend values
+    fixed_obs_levels_file = "fixed_obs_levels_figS4.pkl"
+    fixed_anom_levels_file = "fixed_anom_levels_figS4.pkl"
+
+    if not (os.path.isfile(fixed_obs_levels_file) and os.path.isfile(fixed_anom_levels_file)):
+        obs2plot, modanom2plot = fig1_preprocessing(agg_period='all_seas', fire=fire, region=region)
+
+    if os.path.isfile(fixed_obs_levels_file):
+        with open(fixed_obs_levels_file, "rb") as f:
+            fixed_obs_levels = pickle.load(f)
+    else:
+        with open(fixed_obs_levels_file, "wb") as f:
+            fixed_obs_levels = get_contour_levels(obs2plot, extend='max', level_num=200)
+            pickle.dump(fixed_obs_levels, f)
+
+    if os.path.isfile(fixed_anom_levels_file):
+        with open(fixed_anom_levels_file, "rb") as f:
+            fixed_anom_levels = pickle.load(f)
+    else:
+        with open(fixed_anom_levels_file, "wb") as f:
+            fixed_anom_levels = get_contour_levels(modanom2plot, extend='centre_zero', level_num=8)
+            pickle.dump(fixed_anom_levels, f)
+
+    # Set up the colour maps and legends
+    obs_cmap = {'gpp': plt.get_cmap('Greens'), 'et': plt.get_cmap('Blues'), 'albedo': plt.get_cmap('magma')}
+    anom_cmap = {'gpp': plt.get_cmap('RdYlGn'), 'et': plt.get_cmap('BrBG'), 'albedo': plt.get_cmap('PiYG')}
+
+    # Loop through GPP, ET, and albedo
+    for var, leg in itertools.product(['albedo', 'et', 'gpp'], legend_type):
+
+        print('Plotting: ' + var + ' with ' + leg + ' legend')
+        fire_string = 'fire' if fire else 'nofire'
+        ofile = 'plots/seasonal-mean_'+var+'_'+leg+'-legend_'+region+'_'+fire_string+'.png'
+        print(ofile)
+
+        # if leg == 'varying':
+        #     obs_levels = get_contour_levels(obs2plot, extend='max', level_num=200)
+        #     anom_levels = get_contour_levels(modanom2plot, extend='centre_zero', level_num=10)
+
+        if leg == 'fixed':
+            obs_levels = fixed_obs_levels
+            anom_levels = fixed_anom_levels
+
+        # Make the figure
+        fig = plt.figure(figsize=(15.5, 13), dpi=300)  # width, height
+        fig.subplots_adjust(hspace=0.1, wspace=0.01, top=0.93, bottom=0.01, left=0.12, right=0.82)
+
+        col_vars = ['DJF', 'MAM', 'JJA', 'SON']
+        row_vars = ['Observations', 'GFDL-ESM2M', 'HADGEM2-ES', 'IPSL-CM5A-LR', 'MIROC5']
+        # Plot seasons as COLUMNS and Obs/Models as ROWS. Legend on RIGHT
+        nrows = len(row_vars)
+        ncols = len(col_vars)
+        # Make an index for each position in the plot matrix
+        ind = np.reshape(1 + np.arange(ncols * nrows), (nrows, ncols))
+
+        for irow, row in enumerate(row_vars):
+            for icol, col in enumerate(col_vars):
+
+                print(irow, row, icol, col)
+
+                # Add a subplot
+                if region == 'global':
+                    ax = fig.add_subplot(nrows, ncols, ind[irow, icol], projection=ccrs.Robinson())
+                else:
+                    ax = fig.add_subplot(nrows, ncols, ind[irow, icol], projection=ccrs.PlateCarree())
+                    ax.set_extent([x0, x1, y0, y1], crs=ccrs.PlateCarree())
+
+                # Get the 2D cube to plot
+                cube2plot = fig1_improved_preprocessing(var, agg_period=col, source=row, fire=fire, region='brazil')
+
+                if row == 'Observations':
+                    cmap = obs_cmap[var]
+                    norm = colors.BoundaryNorm(obs_levels[var]['cl'], ncolors=obs_cmap[var].N)  # , clip=True)
+                    # Plot cube
+                    ocm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, norm=norm, extend='max')
+                    ax.set_title(col.upper(), fontsize=14)
+                else:
+                    cmap = anom_cmap[var]
+                    norm = colors.BoundaryNorm(anom_levels[var]['cl'], extend='both', ncolors=cmap.N)  # , clip=True)
+                    vmin = anom_levels[var]['vmin']
+                    vmax = anom_levels[var]['vmax']
+                    # Plot cube
+                    acm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, levels=anom_levels[var]['cl'], extend='both')  # norm=norm, vmin=vmin, vmax=vmax
+                    # colors.CenteredNorm() # works, but can't standardise across the 4 model plots
+                    # acm = iplt.pcolormesh(cube2plot, cmap=cmap, vmin=vmin, vmax=vmax)  # ,
+
+                # Add some stuff to the plot
+                if region == 'global':
+                    ax.set_global()
+                    ax.coastlines()
+                    ax.gridlines(color="gray", alpha=0.2, draw_labels=False)
+                else:
+                    borderlines = cfeature.NaturalEarthFeature(category='cultural', name='admin_0_boundary_lines_land', scale='50m', facecolor='none')
+                    ax.add_feature(borderlines, edgecolor='black', alpha=0.5)
+                    ax.coastlines(resolution='50m', color='black')
+                    # ax.set_xticks(ax.get_xticks())
+                    # ax.set_yticks(ax.get_yticks())
+                    # plt.grid()
+                    gl = ax.gridlines(color="gray", alpha=0.2, draw_labels=True)
+                    gl.top_labels = False
+                    gl.left_labels = False
+                    # if icol > 0:
+                    #     gl.left_labels = False
+                    if irow < len(row_vars) - 1:
+                        gl.bottom_labels = False
+                    if icol < len(col_vars) - 1:
+                        gl.right_labels = False
+
+                l, b, w, h = ax.get_position().bounds
+
+                if icol == 0:
+                    # NB: ax.text is the ONLY WAY to set the row labels with cartopy axes
+                    ax.text(x0, 0.5 * (y0 + y1), f'{row}', va='center', ha='right', rotation='vertical', fontsize=16)
+
+                if (irow == 0) and (icol == len(col_vars)-1):
+                    ## Values legend
+                    # [left, bottom, width, height]
+                    obs_ax = fig.add_axes([l + w + 0.05, b, 0.02, h])
+                    obs_colorbar = plt.colorbar(ocm, obs_ax, orientation='vertical', extend='max')
+                    obs_colorbar.ax.set_yticklabels([obs_levels[var]['label_format'].format(x) for x in obs_colorbar.get_ticks()])
+                    obs_colorbar.set_label('Observed ' + var.upper() + ' ('+obs_levels[var]['unit_string']+')')
+
+                if (irow == 1) and (icol == len(col_vars)-1):
+                    ## Anomaly legend
+                    print("Anomaly legend")
+                    # [left, bottom, width, height]
+                    # acm_ax = plt.gcf().add_axes([l + w + 0.05, b - h, 0.02, h*2])
+                    acm_ax = fig.add_axes([l + w + 0.05, b, 0.02, h])
+                    acm_colorbar = plt.colorbar(acm, acm_ax, orientation='vertical', extend='both')  # , ticks=anom_levels[var]['cl'])
+                    acm_colorbar.ax.set_yticklabels([anom_levels[var]['label_format'].format(x) for x in acm_colorbar.get_ticks()])
+                    acm_colorbar.set_label('Anomaly ' + var.upper() + ' (model - obs)')
+
+            plt.suptitle('ISIMIP: Seasonal Mean ' + var.upper(), fontsize=20)
+            # fig.tight_layout()
+            fig.savefig(ofile, bbox_inches='tight')
+        # fig.savefig(ofile)
         plt.close()
 
 
@@ -1788,10 +2144,15 @@ def main():
     # fig5
 
     # ISIMIP paper plots
-    fig1(region='global')  # Annual and seasonal GPP, ET and albedo plots
-    fig2(region='global', fire=False)  # Veg fraction evaluation using CCI
-    fig2(region='global', fire=True)  # Veg fraction evaluation using CCI
-    figure7()  # River flow plots
+    # paper_fig3(region='global')
+    # paper_figS4(region='brazil')
+    paper_figS4(region='brazil', fire=True)
+    paper_figS4(region='brazil', fire=False)
+
+    # fig1(region='global')  # Annual and seasonal GPP, ET and albedo plots
+    # fig2(region='global', fire=False)  # Veg fraction evaluation using CCI
+    # fig2(region='global', fire=True)  # Veg fraction evaluation using CCI
+    # figure7()  # River flow plots
 
 
 if __name__ == '__main__':
