@@ -93,6 +93,10 @@ def aggregator_multiyear(cube, var, agg_period='year'):
     if agg_period == 'year':
         # Year constraint only accepts years where number of months = 12
         yearcon = iris.Constraint(time=lambda t: (t.bound[1] - t.bound[0]) > dt.timedelta(hours=360 * 24.0))
+        # check that we have a year coordinate
+        coord_list = [coord.name() for coord in cube.coords()]
+        if 'year' not in coord_list:
+            iris.coord_categorisation.add_year(cube, 'time')
         # First, aggregate by year
         cube_agg = cube.aggregated_by('year', agg_funcs[var])
         # Then, remove years with < 12 month data
@@ -662,8 +666,12 @@ def add_frac_metadata(cube):
     leafphenol_number = [leaf_phenol_lut[list(leaf_phenol_lut.keys())[list(pft_lut.values()).index(pt)]] for pt in cube.coord('type').points]
     major_veg_class_coord = iris.coords.AuxCoord(np.int32(major_veg_number), long_name='major_veg_class')
     leaf_phenol_class_coord = iris.coords.AuxCoord(np.int32(leafphenol_number), long_name='leaf_phenol_class')
-    cube.add_aux_coord(major_veg_class_coord, data_dims=0)
-    cube.add_aux_coord(leaf_phenol_class_coord, data_dims=0)
+
+    # Which coord is the vegetation 'type'?
+    dimnum = [i for i, coord in enumerate(cube.coords()) if coord.name() == 'type'][0]
+    # Add the new coordinates to the correct dimension in the cube
+    cube.add_aux_coord(major_veg_class_coord, data_dims=dimnum)
+    cube.add_aux_coord(leaf_phenol_class_coord, data_dims=dimnum)
 
     return cube
 
@@ -710,7 +718,7 @@ def jules_output(jobid, model='all', var='npp_gb', stream='ilamb', rcp='rcp60', 
     rcp_lut = {'historical': 'c20c',
                'rcp26': 'rcp2p6',
                'rcp60': 'rcp6p0'}
-    years = np.arange(start.year, end.year + 1)  # NB: JULES output in yearly streams
+    years = np.arange(start.year, end.year)  # NB: JULES output in yearly streams
 
     # Could write something here to read /home/h02/hadhy/roses/u-bk886/app/jules/rose-app.conf
     # and parse all of the variable names into a dictionary
@@ -771,7 +779,10 @@ def jules_output(jobid, model='all', var='npp_gb', stream='ilamb', rcp='rcp60', 
                         continue
 
         unify_time_units(outcubelist)
-        cube = outcubelist.concatenate_cube()
+        try:
+            cube = outcubelist.concatenate_cube()
+        except:
+            pdb.set_trace()
         # Note about the time coordinate:
         #   By default, the stream from JULES is saved at the end of the aggregation period (month in this case)
         #   Meaning that the date point is the end of the period, and the bounds refer to the preceding month
@@ -816,7 +827,6 @@ def isimip_driving(model, start=dt.datetime(1861, 1, 1), end=dt.datetime(2100, 1
         return
 
     path = '/hpc/data/d00/hadea/isimip2b/'
-
     # Iris constraint for the start and end date range
     dtrange = iris.Constraint(time=lambda cell: start <= cell.point < end)
 
@@ -955,7 +965,12 @@ def jules_output_onload(cube, field, filename):
                                for d in dates], dtype=np.float32)
 
     new_tcoord.points = new_points
-    new_tcoord.guess_bounds(bound_position=0)
+    try:
+        new_tcoord.guess_bounds(bound_position=0)
+    except:
+        # NB: Fails if new_tcoord is only 1 value
+        pass
+
     # Replace the time coordinate with the corrected one
     cube.remove_coord("time")
     cube.add_dim_coord(new_tcoord, 0)  # might need to find this dimension

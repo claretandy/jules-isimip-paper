@@ -1,3 +1,4 @@
+import itertools
 import os, sys
 import pickle
 
@@ -139,6 +140,10 @@ def fig1_improved_preprocessing(var, agg_period='year', source='Observations', f
         mod_agged = load_data.aggregator_multiyear(modeldata, var, agg_period=agg_period)
         # Calculate obs - model anomalies
         mod_agged.data = ma.masked_array(mod_agged.data.data, mask=modeldata[0].data.mask)
+        # Check the units are the same
+        if mod_agged.units != obs2plot.units:
+            mod_agged.convert_units(obs2plot.units)
+        # Calculate the anomaly
         modanom2plot = mod_agged.copy(data=mod_agged.data - obs2plot.data)
 
         return modanom2plot
@@ -372,6 +377,7 @@ def paper_fig3(region='global'):
     import matplotlib.pyplot as plt
     import matplotlib.colors as colors
     import iris.plot as iplt
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
     import itertools
 
     x0, y0, x1, y1 = load_data.get_region_bbox(region)
@@ -401,7 +407,7 @@ def paper_fig3(region='global'):
 
     # Set up the colour maps and legends
     obs_cmap = {'gpp': plt.get_cmap('Greens'), 'et': plt.get_cmap('Blues'), 'albedo': plt.get_cmap('magma')}
-    anom_cmap = {'gpp': plt.get_cmap('RdYlGn'), 'et': plt.get_cmap('BrBG'), 'albedo': plt.get_cmap('PiYG')}
+    anom_cmap = {'gpp': plt.get_cmap('PuOr'), 'et': plt.get_cmap('BrBG'), 'albedo': plt.get_cmap('cividis')}
 
     col_vars = ['gpp', 'et', 'albedo']
     row_vars = ['Observations', 'GFDL-ESM2M', 'HADGEM2-ES', 'IPSL-CM5A-LR', 'MIROC5']
@@ -414,8 +420,8 @@ def paper_fig3(region='global'):
     ofile = 'plots/fig3_global_annual-mean.png'
 
     # Make the figure
-    fig = plt.figure(figsize=(14.5, 13), dpi=300)  # width, height
-    fig.subplots_adjust(hspace=0.1, wspace=0.01, top=0.93, bottom=0.03, left=0.025, right=0.99)
+    fig = plt.figure(figsize=(15, 13), dpi=300)  # width, height
+    fig.subplots_adjust(hspace=0.05, wspace=0.2, top=0.93, bottom=0.03, left=0.025, right=0.99)
 
     for irow, row in enumerate(row_vars):
         for icol, col in enumerate(col_vars):
@@ -426,13 +432,19 @@ def paper_fig3(region='global'):
             ax = fig.add_subplot(nrows, ncols, ind[irow, icol], projection=ccrs.Robinson())
 
             # Get the 2D cube to plot
-            cube2plot = fig1_improved_preprocessing(col.lower(), agg_period='year', source=row, region='global')
+            ncfile = f'/scratch/hadhy/isimip_fig3_{row}_{col}.nc'
+            if not os.path.isfile(ncfile):
+                cube2plot = fig1_improved_preprocessing(col.lower(), agg_period='year', source=row, region='global')
+                iris.save(cube2plot, ncfile)
+            else:
+                cube2plot = iris.load_cube(ncfile)
 
             if row == 'Observations':
                 cmap = obs_cmap[col]
                 norm = colors.BoundaryNorm(obs_levels[col]['cl'], ncolors=cmap.N)  # , clip=True)
                 # Plot cube
-                ocm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, norm=norm, extend='max')
+                ocm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, levels=obs_levels[col]['cl'], extend='max')
+                # ocm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, norm=norm, extend='max')
                 ax.set_title(col.upper() + ' ('+obs_levels[col]['unit_string']+')', fontsize=16)
             else:
                 cmap = anom_cmap[col]
@@ -460,29 +472,145 @@ def paper_fig3(region='global'):
             if row == 'Observations':
                 ## Values legend
                 # [left, bottom, width, height]
-                obs_ax = fig.add_axes([l + (w/4), b+0.005, w/2, 0.01])
-                obs_colorbar = plt.colorbar(ocm, obs_ax, orientation='horizontal', extend='max')
+                # obs_ax = fig.add_axes([l + (w/8), b+0.005, 3*w/4, 0.01]) # Horizontal
+                # obs_colorbar = plt.colorbar(ocm, obs_ax, orientation='horizontal', extend='max')
+                obs_ax = fig.add_axes([l + (w * 1.01), b, w / 15, h]) # Vertical
+                obs_colorbar = plt.colorbar(ocm, obs_ax, orientation='vertical', extend='max')
                 if col == 'albedo':
                     obs_colorbar.set_ticklabels(
                         ['{:.1f}'.format(x) for x in obs_colorbar.get_ticks()])
                 else:
                     obs_colorbar.set_ticklabels([obs_levels[col]['label_format'].format(x) for x in obs_colorbar.get_ticks()])
-                obs_colorbar.set_label(obs_levels[col]['unit_string'])
+                # obs_colorbar.set_label(obs_levels[col]['unit_string'], size=16)
+                obs_colorbar.ax.tick_params(labelsize=14)
 
             if irow == len(row_vars)-1:
                 ## Anomaly legend
                 print("Anomaly legend")
                 # [left, bottom, width, height]
+                non_leg_w = w - (w/15)
                 # acm_ax = plt.gcf().add_axes([l + w + 0.05, b - h, 0.02, h*2])
-                acm_ax = fig.add_axes([l + (w/8), 0, 3*w/4, 0.01])
+                acm_ax = fig.add_axes([l + (w/15/2), 0, non_leg_w, 0.015])
                 acm_colorbar = plt.colorbar(acm, acm_ax, orientation='horizontal', extend='both')  # , ticks=anom_levels[var]['cl'])
                 acm_colorbar.set_ticklabels([anom_levels[col]['label_format'].format(x) for x in acm_colorbar.get_ticks()])
-                acm_colorbar.set_label(col.upper() + ' anomaly (model - obs)')
+                acm_colorbar.set_label(col.upper() + ' anomaly (model - obs)', size=16)
+                acm_colorbar.ax.tick_params(labelsize=14)
 
         plt.suptitle('ISIMIP: Multi-year Annual Mean', fontsize=20)
         # fig.tight_layout()
         fig.savefig(ofile, bbox_inches='tight')
     # fig.savefig(ofile)
+    plt.close()
+
+
+def paper_fig4(region='global', model='ensemble_mean', fire=False):
+    '''
+    PFT fraction anaomalies in comparison to CCI Land Cover PFT fractions
+    :param region:
+    :param model:
+    :param fire:
+    :return:
+    '''
+
+    import cartopy.crs as ccrs
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as colors
+    import iris.plot as iplt
+
+    # Other options: 'cwt', 'v1', 'v2_old', 'v2', '0.25deg_CWT',
+    cciv = '0.25deg_PFT'
+    ofile = 'plots/fig4_pft-vs-cci_'+region+'_'+['fire' if fire else 'nofire'][0]+'_cci-'+cciv+'_'+model+'.png'
+
+    x0, y0, x1, y1 = load_data.get_region_bbox(region)
+
+    obs2plot, modanom2plot, mod2plot = fig2_preprocessing(region=region, cci_version=cciv, fire=fire, calc_anom=True)
+    print('Plotting ' + cciv)
+
+    # Plot PFTs as COLUMNS and Obs+Models as ROWS
+    col_vars = ['CCI', model.replace('_', ' ').upper()]
+    row_vars = ['Tree', 'Shrub', 'Grass', 'Bare']
+    # Make an index for each position in the plot matrix
+    nrows = len(row_vars)
+    ncols = len(col_vars)
+    # Make an index for each position in the plot matrix
+    ind = np.reshape(1 + np.arange(ncols * nrows), (nrows, ncols))
+
+    # Make the figure
+    # width, height
+    fig = plt.figure(figsize=(11, 12), dpi=300)
+    plt.gcf().subplots_adjust(hspace=0.02, wspace=0.02, top=0.93, bottom=0.03, left=0.025, right=0.93)
+
+    for irow, row in enumerate(row_vars):
+        for icol, col in enumerate(col_vars):
+
+            print(irow, row, icol, col)
+
+            # Add a subplot
+            if region == 'global':
+                ax = fig.add_subplot(nrows, ncols, ind[irow, icol], projection=ccrs.Robinson())
+            else:
+                ax = fig.add_subplot(nrows, ncols, ind[irow, icol], projection=ccrs.PlateCarree())
+                ax.set_extent([x0, x1, y0, y1], crs=ccrs.PlateCarree())
+
+            # Create the plots
+            if col == 'CCI':
+                obs_cmap = plt.get_cmap('cubehelix_r')
+                ocm = iplt.pcolormesh(obs2plot[row], cmap=obs_cmap, vmin=0, vmax=100)
+            else:
+                if model == 'ensemble_mean':
+                    models = list(modanom2plot[row].keys())
+                    modelmean = (mod2plot[row][models[0]].data + mod2plot[row][models[1]].data + mod2plot[row][models[2]].data + mod2plot[row][models[3]].data) / 4
+                    ensmean = mod2plot[row][models[0]].copy(data=modelmean)
+                    anom2plot = ensmean[0].copy(data=ensmean[0].data - obs2plot[row].data)
+                else:
+                    modelcube = mod2plot[row][model][0]
+                    anom2plot = modelcube.copy(data=modelcube.data - obs2plot[row].data)
+
+                anom_cmap = plt.get_cmap('PuOr')
+                acm = iplt.pcolormesh(anom2plot, cmap=anom_cmap, vmin=-100, vmax=100)
+
+            if region == 'global':
+                ax.set_global()
+                ax.coastlines()
+                gl = ax.gridlines(color="gray", alpha=0.2, draw_labels=False)
+            else:
+                borderlines = cfeature.NaturalEarthFeature(category='cultural', name='admin_0_boundary_lines_land', scale='50m', facecolor='none')
+                ax.add_feature(borderlines, edgecolor='black', alpha=0.5)
+                ax.coastlines(resolution='50m', color='black')
+                gl = ax.gridlines(color="gray", alpha=0.2, draw_labels=True)
+                gl.top_labels = False
+                gl.left_labels = False
+                if irow < len(row_vars) - 1:
+                    gl.bottom_labels = False
+                if icol < len(col_vars) - 1:
+                    gl.right_labels = False
+
+            if icol == 0:
+                l, b, w, h = ax.get_position().bounds
+                plt.figtext(l - (w / 15), b + (h / 2), row.upper(), horizontalalignment='left', verticalalignment='center', rotation='vertical', fontsize=16)
+
+            if irow == 0:
+                ax.set_title(col.upper(), fontsize=16)
+
+            # Obs legend ..
+            legfrac = 3/4.
+            l, b, w, h = ax.get_position().bounds
+            if (irow == len(row_vars)-1) and (icol == 0):
+                obs_ax = plt.gcf().add_axes(rect=[l+(w*(1-legfrac)/2), 0, w*legfrac, 0.02])
+                obs_colorbar = plt.colorbar(ocm, cax=obs_ax, orientation='horizontal', extend='neither')
+                obs_colorbar.ax.tick_params(labelsize=14)
+                obs_colorbar.set_label('Observed PFT Cover %', size=16)
+
+            # Anomaly legend
+            if (irow == len(row_vars) - 1) and (icol == 1):
+                acm_ax = plt.gcf().add_axes(rect=[l+(w*(1-legfrac)/2), 0, w*legfrac, 0.02])
+                acm_colorbar = plt.colorbar(acm, acm_ax, orientation='horizontal', extend='both')
+                acm_colorbar.ax.tick_params(labelsize=14)
+                acm_colorbar.set_label('Anomaly (model - obs)', size=16)
+
+    plt.suptitle('ISIMIP: PFT Fractions (' + ['Fire On' if fire else 'Fire Off'][0] + ')', fontsize=20)
+
+    fig.savefig(ofile, bbox_inches='tight')
     plt.close()
 
 
@@ -531,7 +659,7 @@ def paper_figS4(region='brazil', fire=False):
 
     # Set up the colour maps and legends
     obs_cmap = {'gpp': plt.get_cmap('Greens'), 'et': plt.get_cmap('Blues'), 'albedo': plt.get_cmap('magma')}
-    anom_cmap = {'gpp': plt.get_cmap('RdYlGn'), 'et': plt.get_cmap('BrBG'), 'albedo': plt.get_cmap('PiYG')}
+    anom_cmap = {'gpp': plt.get_cmap('PuOr'), 'et': plt.get_cmap('BrBG'), 'albedo': plt.get_cmap('PiYG')}
 
     # Loop through GPP, ET, and albedo
     for var, leg in itertools.product(['albedo', 'et', 'gpp'], legend_type):
@@ -540,10 +668,6 @@ def paper_figS4(region='brazil', fire=False):
         fire_string = 'fire' if fire else 'nofire'
         ofile = 'plots/seasonal-mean_'+var+'_'+leg+'-legend_'+region+'_'+fire_string+'.png'
         print(ofile)
-
-        # if leg == 'varying':
-        #     obs_levels = get_contour_levels(obs2plot, extend='max', level_num=200)
-        #     anom_levels = get_contour_levels(modanom2plot, extend='centre_zero', level_num=10)
 
         if leg == 'fixed':
             obs_levels = fixed_obs_levels
@@ -574,14 +698,19 @@ def paper_figS4(region='brazil', fire=False):
                     ax.set_extent([x0, x1, y0, y1], crs=ccrs.PlateCarree())
 
                 # Get the 2D cube to plot
-                cube2plot = fig1_improved_preprocessing(var, agg_period=col, source=row, fire=fire, region='brazil')
+                ncfile = f'/scratch/hadhy/isimip_figS4_{row}_{col}_{var}_{fire_string}.nc'
+                if not os.path.isfile(ncfile):
+                    cube2plot = fig1_improved_preprocessing(var, agg_period=col, source=row, fire=fire, region='brazil')
+                    iris.save(cube2plot, ncfile)
+                else:
+                    cube2plot = iris.load_cube(ncfile)
 
                 if row == 'Observations':
                     cmap = obs_cmap[var]
                     norm = colors.BoundaryNorm(obs_levels[var]['cl'], ncolors=obs_cmap[var].N)  # , clip=True)
                     # Plot cube
                     ocm = iplt.contourf(cube2plot, axes=ax, cmap=cmap, norm=norm, extend='max')
-                    ax.set_title(col.upper(), fontsize=14)
+                    ax.set_title(col.upper(), fontsize=18)
                 else:
                     cmap = anom_cmap[var]
                     norm = colors.BoundaryNorm(anom_levels[var]['cl'], extend='both', ncolors=cmap.N)  # , clip=True)
@@ -605,6 +734,8 @@ def paper_figS4(region='brazil', fire=False):
                     # ax.set_yticks(ax.get_yticks())
                     # plt.grid()
                     gl = ax.gridlines(color="gray", alpha=0.2, draw_labels=True)
+                    gl.xlabel_style = {'size': 14}
+                    gl.ylabel_style = {'size': 14}
                     gl.top_labels = False
                     gl.left_labels = False
                     # if icol > 0:
@@ -618,7 +749,7 @@ def paper_figS4(region='brazil', fire=False):
 
                 if icol == 0:
                     # NB: ax.text is the ONLY WAY to set the row labels with cartopy axes
-                    ax.text(x0, 0.5 * (y0 + y1), f'{row}', va='center', ha='right', rotation='vertical', fontsize=16)
+                    ax.text(x0, 0.5 * (y0 + y1), f'{row}', va='center', ha='right', rotation='vertical', fontsize=18)
 
                 if (irow == 0) and (icol == len(col_vars)-1):
                     ## Values legend
@@ -626,7 +757,8 @@ def paper_figS4(region='brazil', fire=False):
                     obs_ax = fig.add_axes([l + w + 0.05, b, 0.02, h])
                     obs_colorbar = plt.colorbar(ocm, obs_ax, orientation='vertical', extend='max')
                     obs_colorbar.ax.set_yticklabels([obs_levels[var]['label_format'].format(x) for x in obs_colorbar.get_ticks()])
-                    obs_colorbar.set_label('Observed ' + var.upper() + ' ('+obs_levels[var]['unit_string']+')')
+                    obs_colorbar.set_label('Observed ' + var.upper() + '\n('+obs_levels[var]['unit_string']+')', size=16)
+                    obs_colorbar.ax.tick_params(labelsize=14)
 
                 if (irow == 1) and (icol == len(col_vars)-1):
                     ## Anomaly legend
@@ -636,7 +768,8 @@ def paper_figS4(region='brazil', fire=False):
                     acm_ax = fig.add_axes([l + w + 0.05, b, 0.02, h])
                     acm_colorbar = plt.colorbar(acm, acm_ax, orientation='vertical', extend='both')  # , ticks=anom_levels[var]['cl'])
                     acm_colorbar.ax.set_yticklabels([anom_levels[var]['label_format'].format(x) for x in acm_colorbar.get_ticks()])
-                    acm_colorbar.set_label('Anomaly ' + var.upper() + ' (model - obs)')
+                    acm_colorbar.set_label('Anomaly ' + var.upper() + '\n(model - obs)', size=16)
+                    acm_colorbar.ax.tick_params(labelsize=14)
 
             plt.suptitle('ISIMIP: Seasonal Mean ' + var.upper(), fontsize=20)
             # fig.tight_layout()
@@ -1206,6 +1339,7 @@ def fig4_preprocessing(region='brazil'):
             # Observations
             for ok in obs[var].keys():
                 iris.save(obs[var][ok]['data'], 'tmp.nc')
+                # Note that this creates zonal and temporal stats
                 zstats = zonal_stats(x.geometry, 'tmp.nc', stats=statlist)[0]
                 myseries = x.append(pd.Series(zstats).rename({'sum': 'hist_sum', 'count': 'hist_count'}))
             if not isinstance(ogpdf, pd.DataFrame):
@@ -1213,28 +1347,45 @@ def fig4_preprocessing(region='brazil'):
             else:
                 ogpdf = pd.concat([ogpdf, pd.DataFrame(myseries).transpose()])
 
+
 def ipcc_region_stats(cube):
     import geopandas as gpd
-    import rioxarray
     import xarray
-    from shapely.geometry import mapping
     from geocube.api.core import make_geocube
     import regionmask
     # See https://regionmask.readthedocs.io/en/stable/defined_scientific.html
 
     inshp = '/data/users/hadhy/Projects/ISIMIP/IPCC-WGI-reference-regions-v4.shp'
-
-    # iris.save(cube, 'tmp.nc')
-    # xarr_cube = xarray.open_dataarray('tmp.nc')
-    xarr_cube = xarray.DataArray.from_iris(cube)
-    xarr_cube.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True)
-    xarr_cube.rio.write_crs("epsg:4326", inplace=True)
     ipcc = gpd.read_file(inshp, crs="epsg:4326")
     ipcc_land = ipcc[ipcc['Type'].isin(['Land', 'Land-Ocean'])]
 
-    ogpdf = []
-    for i, x in ipcc_land.iterrows():
-        clipped = xarr_cube.rio.clip(x.geometry.apply(mapping), x.crs, drop=False)
+    xarr_cube = xarray.DataArray.from_iris(cube)
+    xarr_cube.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True)
+    xarr_cube.rio.write_crs("epsg:4326", inplace=True)
+
+    # Unfortunately the IPCC shapefile doesn't have any values in it, so we'll have to create an index,
+    # and join it back later
+    ipcc_land['ID'] = ipcc_land.index
+    shp_xarr = make_geocube(vector_data=ipcc_land, measurements=["ID"], like=xarr_cube.to_dataset())
+    # shp_xarr.data_vars['ID'].data = shp_xarr.data_vars['ID'].to_masked_array()
+    shp_xarr.data_vars['ID'].plot()  # Plots the IPCC regions on the grid resolution
+
+    # Merge DataArrays into a single DataSet
+    ds = xarray.Dataset()
+    ds['ipcc_land'] = shp_xarr.data_vars['ID'].rename({'x': 'lon', 'y': 'lat'})
+    ds['cube'] = xarr_cube
+
+    # This creates an area average timeseries for each IPCC region
+    aggregated_ts = ds.groupby('ipcc_land').mean()
+
+    # Convert to a pandas dataframe
+    df = aggregated_ts.to_dataframe()
+    df.reset_index(inplace=True)
+    df = df.astype({'ipcc_land': 'int16'})
+    # Join IPCC land df
+    df_merged = pd.merge(left=df, right=ipcc_land, left_on='ipcc_land', right_on='ID', how='left')
+
+    return df_merged
 
 
 def geom_to_masked_cube(cube, geometry, x_coord, y_coord,
@@ -2145,7 +2296,12 @@ def main():
 
     # ISIMIP paper plots
     # paper_fig3(region='global')
-    # paper_figS4(region='brazil')
+    # for fire, model in itertools.product([True, False], ['ensemble_mean', 'GFDL-ESM2M', 'HADGEM2-ES', 'IPSL-CM5A-LR', 'MIROC5']):
+    #     print(fire, model)
+    #     paper_fig4(region='global', model=model, fire=fire)
+
+    # paper_fig4(region='global', fire=False)
+    # paper_fig4(region='global', fire=True)
     paper_figS4(region='brazil', fire=True)
     paper_figS4(region='brazil', fire=False)
 
