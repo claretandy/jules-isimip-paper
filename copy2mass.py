@@ -28,6 +28,12 @@ def run_model_driving(model, drv, stream, data_path, output_path, moose_path):
     output = subprocess.run(['moo', 'ls', mass_tarball], capture_output=True, text=True)
     already_there = True if mass_tarball in output.stdout else False
 
+    # Check if it's already a folder on MASS, if not, create one
+    dir_test = subprocess.run(['moo', 'ls', os.path.dirname(mass_tarball)], capture_output=True, text=True)
+    create_dir = False if dir_test.returncode == 0 else True
+    if create_dir:
+        subprocess.run(['moo', 'mkdir', '-p', os.path.dirname(mass_tarball)])
+
     if not already_there:
         # Create a compressed tar file, only adding existing files
         if not os.path.isfile(tarball):
@@ -45,9 +51,10 @@ def run_model_driving(model, drv, stream, data_path, output_path, moose_path):
 
 def main():
     # For each model and each stream, create a *.tar.gz file
-    data_path = '/hpc/data/d01/hadcam/jules_output/ALL_u-bk886_isimip_0p5deg_origsoil_dailytrif/'
-    output_path = '/scratch/hadhy/ALL_u-bk886_isimip_0p5deg_origsoil_dailytrif/'
-    moose_path = 'moose:/adhoc/projects/isi-mip/isimip_2b/ALL_u-bk886_isimip_0p5deg_origsoil_dailytrif'
+    # data_path = '/hpc/data/d01/hadcam/jules_output/ALL_u-bk886_isimip_0p5deg_origsoil_dailytrif/'
+    data_path = '/hpc/data/d05/cburton/jules_output/u-cf137'
+    output_path = '/scratch/hadhy/u-cf137/'
+    moose_path = 'moose:/adhoc/projects/isi-mip/isimip_2b/u-cf137'
 
     models = ['MIROC5', 'IPSL-CM5A-LR', 'GFDL-ESM2M', 'HADGEM2-ES']
 
@@ -75,7 +82,6 @@ def main_orig():
     data_path = '/hpc/data/d01/hadcam/jules_output/ALL_u-bk886_isimip_0p5deg_origsoil_dailytrif/'
     output_path = '/scratch/hadhy/ALL_u-bk886_isimip_0p5deg_origsoil_dailytrif/'
     moose_path = 'moose:/adhoc/projects/isi-mip/isimip_2b/ALL_u-bk886_isimip_0p5deg_origsoil_dailytrif'
-
     models = ['MIROC5', 'IPSL-CM5A-LR', 'GFDL-ESM2M', 'HADGEM2-ES']
 
     for model in models:
